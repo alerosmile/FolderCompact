@@ -17,41 +17,83 @@ public class FolderCompactTreeStructureProvider implements TreeStructureProvider
 
     @Override
     public @NotNull Collection<AbstractTreeNode<?>> modify(@NotNull AbstractTreeNode<?> parent, @NotNull Collection<AbstractTreeNode<?>> children, ViewSettings settings) {
-        if(parent instanceof PsiDirectoryNode &&
-                ProjectRootsUtil.isModuleContentRoot(((PsiDirectoryNode) parent).getValue())) {
-            FolderCompactConfigState fcState = FolderCompactConfigState.getInstance(parent.getProject());
-            if(fcState.getShowModuleLibraries()) {
-                children.add(new ModuleLibrariesNode((PsiDirectoryNode) parent, settings));
+        if(parent instanceof PsiDirectoryNode) {
+            PsiDirectoryNode dirParent = (PsiDirectoryNode)parent;
+            FolderCompactConfigState fcState = FolderCompactConfigState.getInstance(dirParent.getProject());
+            if(fcState.getShowModuleLibraries() && ProjectRootsUtil.isModuleContentRoot(dirParent.getValue())) {
+                children.add(new ModuleLibrariesNode((PsiDirectoryNode) dirParent, settings));
             }
             if(fcState.getCompactSourceFolder()) {
-                return children.stream().map(child->compact((PsiDirectoryNode) parent, child)).flatMap(List::stream).collect(Collectors.toList());
+                return children.stream().map(child->compact(dirParent, child)).flatMap(List::stream).collect(Collectors.toList());
             }
         }
         return children;
     }
 
     private List<AbstractTreeNode<?>> compact(PsiDirectoryNode root, AbstractTreeNode<?> node) {
-        List<AbstractTreeNode<?>> found = findSourceRootChild(root, node, new ArrayList<>());
-        return found.isEmpty() ? Arrays.asList(node) : found;
+        if((node instanceof PsiDirectoryNode)) {
+            PsiDirectoryNode dirNode = (PsiDirectoryNode) node;
+            List<AbstractTreeNode<?>> out = new ArrayList<>();
+
+            if(ProjectRootsUtil.isModuleContentRoot(dirNode.getVirtualFile(), dirNode.getProject())) {
+                out.add(node);
+            }
+            else if(ProjectRootsUtil.isModuleContentRoot(root.getVirtualFile(), root.getProject())) {
+                // the start of a compacted folder must be a content root
+                findSourceRootChild(root, node, 1, out);
+                out.add(node);
+            }
+            else if(ProjectRootsUtil.isModuleSourceRoot(dirNode.getVirtualFile(), dirNode.getProject())) {
+                // do not add folders which are added as compacted folders
+            } else if(areAllChildrenModuleSourceRoot(dirNode)) {
+                // all children are compacted folders -> enforce leaf node
+                out.add(new LeafFolderNode(dirNode));
+            }
+            else {
+                out.add(node);
+            }
+            return out;
+        }
+        else {
+            // add non-directory nodes
+            return Arrays.asList(node);
+        }
     }
 
-    private List<AbstractTreeNode<?>> findSourceRootChild(PsiDirectoryNode root, AbstractTreeNode<?> node, List<AbstractTreeNode<?>> out) {
+    private List<AbstractTreeNode<?>> findSourceRootChild(PsiDirectoryNode root, AbstractTreeNode<?> node, int depth, List<AbstractTreeNode<?>> out) {
         if((node instanceof PsiDirectoryNode)) {
             PsiDirectoryNode dirNode = (PsiDirectoryNode) node;
             if(ProjectRootsUtil.isModuleContentRoot(dirNode.getVirtualFile(), dirNode.getProject())) {
-//                out.add(new CompactedFolderNode(root, dirNode));
-                //无法确保该TreeStructureProvider一定在最后执行. 暂时不处理
+                // skip paths containing content roots
                 return out;
             }
-            if(ProjectRootsUtil.isModuleSourceRoot(dirNode.getVirtualFile(), dirNode.getProject())) {
-                out.add(new CompactedFolderNode(root, dirNode));
-                return out;//不再继续往下找
+            if (ProjectRootsUtil.isModuleSourceRoot(dirNode.getVirtualFile(), dirNode.getProject())) {
+                if(depth > 1) {
+                    // no need to compact if root is immediate parent of node
+                    out.add(new CompactedFolderNode(root, dirNode));
+                }
+                return out;
             }
             for (AbstractTreeNode<?> child : node.getChildren()) {
-                findSourceRootChild(root, child, out);
+                findSourceRootChild(root, child, depth+1, out);
             }
         }
         return out;
     }
 
+    private static boolean areAllChildrenModuleSourceRoot(PsiDirectoryNode dirNode) {
+        for(AbstractTreeNode<?> childNode : dirNode.getChildren()) {
+            if(childNode instanceof PsiDirectoryNode)
+            {
+                PsiDirectoryNode childDirNode = (PsiDirectoryNode)childNode;
+                if(!ProjectRootsUtil.isModuleSourceRoot(childDirNode.getVirtualFile(), childDirNode.getProject())) {
+                    return false;
+                }
+            }
+            else {
+                return false;
+            }
+        }
+        return true;
+    }
 }
